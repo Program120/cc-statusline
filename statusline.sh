@@ -29,17 +29,12 @@ fmt() {
 }
 
 remaining() {
-  local reset_ts=$1
-  local now=$(date +%s)
+  local reset_ts=$1 now=$(date +%s)
   local diff=$((reset_ts - now))
-  if [ "$diff" -le 0 ]; then
-    echo "now"
-  elif [ "$diff" -lt 3600 ]; then
-    echo "$((diff / 60))m"
-  elif [ "$diff" -lt 86400 ]; then
-    echo "$((diff / 3600))h$((diff % 3600 / 60))m"
-  else
-    echo "$((diff / 86400))d $((diff % 86400 / 3600))hr $((diff % 3600 / 60))m"
+  if [ "$diff" -le 0 ]; then echo "now"
+  elif [ "$diff" -lt 3600 ]; then echo "$((diff / 60))m"
+  elif [ "$diff" -lt 86400 ]; then echo "$((diff / 3600))h$((diff % 3600 / 60))m"
+  else echo "$((diff / 86400))d $((diff % 86400 / 3600))hr $((diff % 3600 / 60))m"
   fi
 }
 
@@ -55,7 +50,6 @@ WEEK_REMAIN=$(remaining "$WEEK_RESET")
 R="\033[0m"
 SEP=""
 
-# Powerline backgrounds
 C_DKRED="\033[38;5;231m\033[48;5;131m"
 C_YELLOW="\033[38;5;16m\033[48;5;220m"
 C_PURPLE="\033[38;5;231m\033[48;5;103m"
@@ -67,17 +61,16 @@ C_MAUVE="\033[38;5;16m\033[48;5;139m"
 C_TAN="\033[38;5;16m\033[48;5;180m"
 DIM="\033[2m"
 
-# Powerline separator helper: fg=prev_bg, bg=next_bg
 sep() { printf "\033[38;5;%sm\033[48;5;%sm%s\033[0m" "$1" "$2" "$SEP"; }
 sep_end() { printf "\033[38;5;%sm\033[49m%s\033[0m" "$1" "$SEP"; }
 
-# ── Line 1: Model | Ctx | Ctx% ──
+# ── Line 1: Model | Ctx tokens | Ctx % ──
 printf "${C_DKRED} Model: ${MODEL} ${R}"; sep 131 220
 printf "${C_YELLOW} Ctx: ${CTX_FMT} ${R}"; sep 220 103
 printf "${C_PURPLE} Ctx: ${CTX_USED_PCT}%% ${R}"; sep_end 103
 printf "\n"
 
-# ── Line 2: Session | Session Reset | Weekly | Weekly Reset ──
+# ── Line 2: Session | Reset | Weekly | Reset ──
 printf "${C_DKRED} Session: ${FIVE_HR_PCT}%% ${R}"; sep 131 180
 printf "${C_TAN} Reset ~${FIVE_REMAIN} ${R}"; sep 180 220
 printf "${C_YELLOW} Weekly: ${WEEK_PCT}%% ${R}"; sep 220 103
@@ -86,11 +79,11 @@ printf "\n"
 
 # ── Line 3: Cache | Read | Write | In | Out ──
 if [ "$HIT_PCT" -ge 70 ]; then
-  BADGE="${C_GREEN}"; BADGE_C=71
+  BADGE="${C_GREEN}"
 elif [ "$HIT_PCT" -ge 40 ]; then
-  BADGE="${C_YELLOW}"; BADGE_C=220
+  BADGE="${C_YELLOW}"
 else
-  BADGE="${C_DKRED}"; BADGE_C=131
+  BADGE="${C_DKRED}"
 fi
 
 printf "${BADGE} Cache %3d%% ${R}" "$HIT_PCT"
