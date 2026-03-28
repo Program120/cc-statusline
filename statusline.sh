@@ -38,7 +38,24 @@ remaining() {
   fi
 }
 
-CTX_FMT=$(fmt "$((CTX_INPUT + CTX_OUTPUT))")
+# Estimate actual context usage from percentage × capacity
+CTX_CAP=$(echo "$input" | jq -r '
+  .context_window.limit // .context_window.capacity // .context_window.max_tokens // 0
+')
+if [ "$CTX_CAP" -le 0 ] 2>/dev/null; then
+  # Fallback: parse from model name (e.g. "1M" → 1000000, "200K" → 200000)
+  CAP_STR=$(echo "$MODEL" | grep -oE '[0-9]+[MmKk]' | head -1)
+  case "$CAP_STR" in
+    *[Mm]) CTX_CAP=$(( ${CAP_STR%?} * 1000000 )) ;;
+    *[Kk]) CTX_CAP=$(( ${CAP_STR%?} * 1000 )) ;;
+    *) CTX_CAP=0 ;;
+  esac
+fi
+if [ "$CTX_CAP" -gt 0 ] && [ "$CTX_USED_PCT" -gt 0 ]; then
+  CTX_FMT=$(fmt "$((CTX_CAP * CTX_USED_PCT / 100))")
+else
+  CTX_FMT=$(fmt "$((CTX_INPUT + CTX_OUTPUT))")
+fi
 TOTAL_CACHE=$((CACHE_READ + CACHE_WRITE))
 [ "$TOTAL_CACHE" -gt 0 ] && HIT_PCT=$((CACHE_READ * 100 / TOTAL_CACHE)) || HIT_PCT=0
 CR=$(fmt "$CACHE_READ"); CW=$(fmt "$CACHE_WRITE")
