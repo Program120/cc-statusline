@@ -1,10 +1,12 @@
 #!/bin/bash
 input=$(cat)
 
-# Extract all metrics
-MODEL=$(echo "$input" | jq -r '.model.display_name // "unknown"')
-SESSION_ID=$(echo "$input" | jq -r '.session_id // .sessionId // "unknown"')
+# Extract all metrics in a single jq pass. Strings go through @sh so eval
+# stays safe on values containing spaces, quotes, or $.
 eval "$(echo "$input" | jq -r '
+  "MODEL=\(.model.display_name // "unknown" | @sh)",
+  "SESSION_ID=\(.session_id // .sessionId // "unknown" | @sh)",
+  "CWD=\(.workspace.current_dir // .cwd // "" | @sh)",
   "CTX_INPUT=\(.context_window.total_input_tokens // 0)",
   "CTX_OUTPUT=\(.context_window.total_output_tokens // 0)",
   "CTX_USED_PCT=\(.context_window.used_percentage // 0 | round)",
@@ -15,7 +17,8 @@ eval "$(echo "$input" | jq -r '
   "FIVE_HR_PCT=\(.rate_limits.five_hour.used_percentage // 0 | round)",
   "FIVE_HR_RESET=\(.rate_limits.five_hour.resets_at // 0)",
   "WEEK_PCT=\(.rate_limits.seven_day.used_percentage // 0 | round)",
-  "WEEK_RESET=\(.rate_limits.seven_day.resets_at // 0)"
+  "WEEK_RESET=\(.rate_limits.seven_day.resets_at // 0)",
+  "CTX_CAP=\(.context_window.limit // .context_window.capacity // .context_window.max_tokens // 0)"
 ')"
 
 fmt() {
@@ -39,10 +42,7 @@ remaining() {
   fi
 }
 
-# Estimate actual context usage from percentage × capacity
-CTX_CAP=$(echo "$input" | jq -r '
-  .context_window.limit // .context_window.capacity // .context_window.max_tokens // 0
-')
+# Estimate actual context usage from percentage × capacity (CTX_CAP from jq above)
 if [ "$CTX_CAP" -le 0 ] 2>/dev/null; then
   # Fallback: parse from model name (e.g. "1M" → 1000000, "200K" → 200000)
   CAP_STR=$(echo "$MODEL" | grep -oE '[0-9]+[MmKk]' | head -1)
@@ -64,9 +64,8 @@ IN=$(fmt "$INPUT"); OUT=$(fmt "$OUTPUT")
 FIVE_REMAIN=$(remaining "$FIVE_HR_RESET")
 WEEK_REMAIN=$(remaining "$WEEK_RESET")
 
-# Git branch. Resolve against the session's dir, not the script's cwd.
-# Detached HEAD falls back to a short sha, prefixed with @ to disambiguate.
-CWD=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
+# Git branch. Resolve against the session's dir (CWD from jq above), not the
+# script's cwd. Detached HEAD falls back to a short sha, prefixed with @.
 BRANCH=""
 if [ -n "$CWD" ]; then
   BRANCH=$(git -C "$CWD" symbolic-ref --quiet --short HEAD 2>/dev/null)
