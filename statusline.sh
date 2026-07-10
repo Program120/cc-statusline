@@ -64,6 +64,18 @@ IN=$(fmt "$INPUT"); OUT=$(fmt "$OUTPUT")
 FIVE_REMAIN=$(remaining "$FIVE_HR_RESET")
 WEEK_REMAIN=$(remaining "$WEEK_RESET")
 
+# Git branch. Resolve against the session's dir, not the script's cwd.
+# Detached HEAD falls back to a short sha, prefixed with @ to disambiguate.
+CWD=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
+BRANCH=""
+if [ -n "$CWD" ]; then
+  BRANCH=$(git -C "$CWD" symbolic-ref --quiet --short HEAD 2>/dev/null)
+  if [ -z "$BRANCH" ]; then
+    SHA=$(git -C "$CWD" rev-parse --short HEAD 2>/dev/null)
+    [ -n "$SHA" ] && BRANCH="@${SHA}"
+  fi
+fi
+
 # === Colors ===
 R="\033[0m"
 SEP=""
@@ -82,10 +94,16 @@ DIM="\033[2m"
 sep() { printf "\033[38;5;%sm\033[48;5;%sm%s\033[0m" "$1" "$2" "$SEP"; }
 sep_end() { printf "\033[38;5;%sm\033[49m%s\033[0m" "$1" "$SEP"; }
 
-# ── Line 1: Model | Ctx tokens | Ctx % ──
+# ── Line 1: Model | Ctx tokens | Ctx % | Branch ──
 printf "${C_DKRED} Model: ${MODEL} ${R}"; sep 131 220
 printf "${C_YELLOW} Ctx: ${CTX_FMT} ${R}"; sep 220 103
-printf "${C_PURPLE} Ctx: ${CTX_USED_PCT}%% ${R}"; sep_end 103
+printf "${C_PURPLE} Ctx: ${CTX_USED_PCT}%% ${R}"
+if [ -n "$BRANCH" ]; then
+  sep 103 71
+  printf "${C_GREEN}  ${BRANCH} ${R}"; sep_end 71
+else
+  sep_end 103
+fi
 printf "\n"
 
 # ── Line 2: Session | Reset | Weekly | Reset ──
