@@ -3,6 +3,7 @@ input=$(cat)
 
 # Extract all metrics
 MODEL=$(echo "$input" | jq -r '.model.display_name // "unknown"')
+SESSION_ID=$(echo "$input" | jq -r '.session_id // .sessionId // "unknown"')
 eval "$(echo "$input" | jq -r '
   "CTX_INPUT=\(.context_window.total_input_tokens // 0)",
   "CTX_OUTPUT=\(.context_window.total_output_tokens // 0)",
@@ -109,4 +110,8 @@ printf " ${C_ORANGE} Write ${CW} ${R}"
 printf " ${DIM}|${R}"
 printf " ${C_BLUE} In ${IN} ${R}"
 printf " ${C_MAUVE} Out ${OUT} ${R}"
+printf "\n"
+
+# ── Line 4: Session ID ──
+printf "${C_MAUVE} Session: ${SESSION_ID} ${R}"; sep_end 139
 printf "\n"
