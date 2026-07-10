@@ -95,12 +95,12 @@ sep() { printf "\033[38;5;%sm\033[48;5;%sm%s\033[0m" "$1" "$2" "$SEP"; }
 sep_end() { printf "\033[38;5;%sm\033[49m%s\033[0m" "$1" "$SEP"; }
 
 # ── Line 1: Model | Ctx tokens | Ctx % | Branch ──
-printf "${C_DKRED} Model: ${MODEL} ${R}"; sep 131 220
+printf "${C_DKRED} Model: %s ${R}" "$MODEL"; sep 131 220
 printf "${C_YELLOW} Ctx: ${CTX_FMT} ${R}"; sep 220 103
 printf "${C_PURPLE} Ctx: ${CTX_USED_PCT}%% ${R}"
 if [ -n "$BRANCH" ]; then
   sep 103 71
-  printf "${C_GREEN}  ${BRANCH} ${R}"; sep_end 71
+  printf "${C_GREEN}  %s ${R}" "$BRANCH"; sep_end 71
 else
   sep_end 103
 fi
@@ -131,5 +131,5 @@ printf " ${C_MAUVE} Out ${OUT} ${R}"
 printf "\n"
 
 # ── Line 4: Session ID ──
-printf "${C_MAUVE} Session: ${SESSION_ID} ${R}"; sep_end 139
+printf "${C_MAUVE} Session: %s ${R}" "$SESSION_ID"; sep_end 139
 printf "\n"
