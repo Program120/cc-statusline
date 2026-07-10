@@ -30,15 +30,20 @@ for cmd in jq bc; do
   fi
 done
 
+# git is optional — only the branch segment needs it
+if ! command -v git &>/dev/null; then
+  echo "ℹ️  git not found — the branch segment will be hidden"
+fi
+
 # Configure Claude Code settings
 if [ -f "$SETTINGS" ]; then
   if command -v jq &>/dev/null; then
     tmp=$(mktemp)
-    jq '.statusLine = {"type": "command", "command": "~/.claude/statusline.sh", "padding": 0}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+    jq '.statusLine = {"type": "command", "command": "~/.claude/statusline.sh", "padding": 0, "refreshInterval": 1}' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
     echo "✅ Claude Code settings updated"
   else
     echo "⚠️  Please add the following to $SETTINGS manually:"
-    echo '   "statusLine": {"type": "command", "command": "~/.claude/statusline.sh", "padding": 0}'
+    echo '   "statusLine": {"type": "command", "command": "~/.claude/statusline.sh", "padding": 0, "refreshInterval": 1}'
   fi
 else
   cat > "$SETTINGS" << 'EOF'
@@ -46,7 +51,8 @@ else
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
-    "padding": 0
+    "padding": 0,
+    "refreshInterval": 1
   }
 }
 EOF
