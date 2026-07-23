@@ -1,4 +1,6 @@
 #!/bin/bash
+umask 077
+
 input=$(cat)
 display_input=$input
 HIDE_TRANSIENT_USAGE=0
@@ -198,6 +200,53 @@ if [ "$HIDE_TRANSIENT_USAGE" = "1" ]; then
   OUTPUT=""
 fi
 
+# Codex quota is refreshed out of band; the per-second statusline path only reads
+# the small, redacted cache. Invalid, expired, or very stale snapshots stay hidden.
+NOW=$(date +%s)
+CODEX_REMAIN_PCT=""
+CODEX_RESET=""
+CODEX_STALE=0
+CODEX_CACHE_FILE="${CC_STATUSLINE_CACHE_FILE:-}"
+if [ -z "$CODEX_CACHE_FILE" ]; then
+  if [ -n "${XDG_CACHE_HOME:-}" ]; then
+    CODEX_CACHE_FILE="${XDG_CACHE_HOME}/cc-statusline/codex-quota.json"
+  elif [ -n "${HOME:-}" ]; then
+    CODEX_CACHE_FILE="${HOME}/.cache/cc-statusline/codex-quota.json"
+  fi
+fi
+if [ -n "$CODEX_CACHE_FILE" ] && [ -r "$CODEX_CACHE_FILE" ]; then
+  if codex_fields=$(jq -er '
+    select(
+      type == "object"
+      and .schema_version == 1
+      and (.fetched_at | type) == "number"
+      and (.fetched_at | floor) == .fetched_at
+      and .fetched_at > 0
+      and (.weekly | type) == "object"
+      and .weekly.window_duration_mins == 10080
+      and (.weekly.remaining_percent | type) == "number"
+      and (.weekly.remaining_percent | floor) == .weekly.remaining_percent
+      and .weekly.remaining_percent >= 0
+      and .weekly.remaining_percent <= 100
+      and (.weekly.resets_at | type) == "number"
+      and (.weekly.resets_at | floor) == .weekly.resets_at
+      and .weekly.resets_at > 0
+    )
+    | "CODEX_FETCHED_AT=\(.fetched_at | @sh)",
+      "CODEX_REMAIN_PCT=\(.weekly.remaining_percent | @sh)",
+      "CODEX_RESET=\(.weekly.resets_at | @sh)"
+  ' "$CODEX_CACHE_FILE" 2>/dev/null); then
+    eval "$codex_fields"
+    CODEX_AGE=$((NOW - CODEX_FETCHED_AT))
+    if [ "$CODEX_AGE" -lt -60 ] || [ "$CODEX_AGE" -gt 3600 ] || [ "$CODEX_RESET" -le "$NOW" ]; then
+      CODEX_REMAIN_PCT=""
+      CODEX_RESET=""
+    elif [ "$CODEX_AGE" -gt 900 ]; then
+      CODEX_STALE=1
+    fi
+  fi
+fi
+
 is_uint() {
   [[ "$1" =~ ^[0-9]+$ ]]
 }
@@ -214,9 +263,8 @@ fmt() {
 }
 
 remaining() {
-  local reset_ts=$1 now
-  now=$(date +%s)
-  local diff=$((reset_ts - now))
+  local reset_ts=$1
+  local diff=$((reset_ts - NOW))
   if [ "$diff" -le 0 ]; then echo "now"
   elif [ "$diff" -lt 3600 ]; then echo "$((diff / 60))m"
   elif [ "$diff" -lt 86400 ]; then echo "$((diff / 3600))h$((diff % 3600 / 60))m"
@@ -265,13 +313,20 @@ CR=""; CW=""; IN=""; OUT=""
 # alongside its corresponding limit and only when it is a valid future epoch.
 if ! is_uint "$FIVE_HR_PCT"; then FIVE_HR_PCT=""; fi
 if ! is_uint "$WEEK_PCT"; then WEEK_PCT=""; fi
+if ! is_uint "$CODEX_REMAIN_PCT"; then CODEX_REMAIN_PCT=""; fi
 FIVE_REMAIN=""
 WEEK_REMAIN=""
+CODEX_REMAIN=""
 if [ -n "$FIVE_HR_PCT" ] && is_uint "$FIVE_HR_RESET" && [ "$FIVE_HR_RESET" -gt 0 ]; then
   FIVE_REMAIN=$(remaining "$FIVE_HR_RESET")
 fi
 if [ -n "$WEEK_PCT" ] && is_uint "$WEEK_RESET" && [ "$WEEK_RESET" -gt 0 ]; then
   WEEK_REMAIN=$(remaining "$WEEK_RESET")
+fi
+if [ -n "$CODEX_REMAIN_PCT" ] && is_uint "$CODEX_RESET" && [ "$CODEX_RESET" -gt "$NOW" ]; then
+  CODEX_REMAIN=$(remaining "$CODEX_RESET")
+else
+  CODEX_REMAIN_PCT=""
 fi
 
 # Git branch. Resolve against the session's dir (CWD from jq above), not the
@@ -348,6 +403,23 @@ if [ -n "$WEEK_PCT" ]; then
     sep "$RATE_BG" 103
     printf "${C_PURPLE} Reset ~%s ${R}" "$WEEK_REMAIN"
     RATE_BG=103
+  fi
+fi
+if [ -n "$CODEX_REMAIN_PCT" ]; then
+  if [ "$RATE_PRINTED" -eq 1 ]; then
+    sep "$RATE_BG" 109
+  fi
+  if [ "$CODEX_STALE" -eq 1 ]; then
+    printf "${C_TEAL} Codex W*: %s%% left ${R}" "$CODEX_REMAIN_PCT"
+  else
+    printf "${C_TEAL} Codex W: %s%% left ${R}" "$CODEX_REMAIN_PCT"
+  fi
+  RATE_PRINTED=1
+  RATE_BG=109
+  if [ -n "$CODEX_REMAIN" ]; then
+    sep "$RATE_BG" 180
+    printf "${C_TAN} Reset ~%s ${R}" "$CODEX_REMAIN"
+    RATE_BG=180
   fi
 fi
 if [ "$RATE_PRINTED" -eq 1 ]; then
