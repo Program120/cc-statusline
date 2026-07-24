@@ -156,6 +156,7 @@ fi
 # Extract display fields in one jq pass after any cached metrics have been
 # merged. Values go through @sh so eval stays safe on spaces, quotes, or $.
 MODEL="unknown"
+EFFORT=""
 SESSION_ID="unknown"
 CWD=""
 CTX_INPUT=""
@@ -172,6 +173,7 @@ WEEK_PCT=""
 WEEK_RESET=""
 if display_fields=$(printf '%s' "$display_input" | jq -r '
   "MODEL=\((.model.display_name // .model.id // "unknown") | @sh)",
+  "EFFORT=\((.effort.level as $e | if (($e | type) == "string" and (["low", "medium", "high", "xhigh", "max"] | index($e)) != null) then $e else "" end) | @sh)",
   "SESSION_ID=\((.session_id // .sessionId // "unknown") | @sh)",
   "CWD=\((.workspace.current_dir // .cwd // "") | @sh)",
   "CTX_INPUT=\((.context_window.total_input_tokens // "") | @sh)",
@@ -358,9 +360,14 @@ DIM="\033[2m"
 sep() { printf "\033[38;5;%sm\033[48;5;%sm%s\033[0m" "$1" "$2" "$SEP"; }
 sep_end() { printf "\033[38;5;%sm\033[49m%s\033[0m" "$1" "$SEP"; }
 
-# ── Line 1: Model | Ctx tokens | Ctx % | Branch ──
+# ── Line 1: Model | Effort | Ctx tokens | Ctx % | Branch ──
 printf "${C_DKRED} Model: %s ${R}" "$MODEL"
 LAST_BG=131
+if [ -n "$EFFORT" ]; then
+  sep "$LAST_BG" 109
+  printf "${C_TEAL} Effort: %s ${R}" "$EFFORT"
+  LAST_BG=109
+fi
 if [ -n "$CTX_FMT" ]; then
   sep "$LAST_BG" 220
   printf "${C_YELLOW} Ctx: %s ${R}" "$CTX_FMT"

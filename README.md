@@ -11,19 +11,22 @@ A lightweight Powerline-style status line for [Claude Code](https://claude.ai/co
 - **Claude Usage** — session and weekly percentages when Claude Code provides them
 - **Codex Weekly Quota** — remaining percentage and reset countdown from a redacted local snapshot
 - **Context Window** — occupied tokens and context percentage
+- **Live Reasoning Effort** — the effective `low`, `medium`, `high`, `xhigh`, or `max` value for the current session
 - **Model, Git Branch, and Session ID** — including live branch updates with `refreshInterval`
 - **Transient-zero Protection** — keeps the last valid per-session metrics when an intermediate refresh contains synthetic zeroes
 
 ## Layout
 
 ```text
-Line 1:  Model: Opus 4.8 (1M) ► Ctx: 503.8k ► Ctx: 7% ► main
+Line 1:  Model: Opus 4.8 (1M) ► Effort: xhigh ► Ctx: 503.8k ► Ctx: 7% ► main
 Line 2:  Session: 14% ► Reset ~3h50m ► Weekly: 10% ► Reset ~5d ► Codex W: 68% left ► Reset ~5d
 Line 3:  Cache  97%   Read 68.3k   Write 1.7k  |  In 1   Out 126
 Line 4:  Session: 0f9c2a71-4d3e-4b8a-9c15-6e2b7a04d8f3
 ```
 
 Claude and Codex percentages intentionally have different labels: Claude Code supplies used percentages, while `Codex W` explicitly shows the percentage **left**. `Codex W*` means the last successful snapshot is older than 15 minutes. It is hidden after 60 minutes or once its reset time has passed.
+
+`Effort` comes directly from the live `.effort.level` field in Claude Code's statusline input. It reflects the effective session value, including mid-session `/effort` changes; the script does not infer it from settings, environment variables, CC Switch, or the model name. The segment is hidden when the model does not support effort, the field is unavailable, or its value is invalid. Claude Code's separate `.thinking.enabled` boolean is intentionally not shown because it is not an effort level.
 
 ## How the Codex quota integration works
 
@@ -51,7 +54,7 @@ The RPC is still marked experimental by Codex. This integration was verified wit
 
 Core statusline:
 
-- Claude Code v2.1.0+
+- Claude Code v2.1.0+; v2.1.119+ is required for the live Effort segment (verified with v2.1.218)
 - Bash, `jq`, and `bc`
 - `git` is optional and only needed for the branch segment
 - A Nerd Font or Powerline font for separators
