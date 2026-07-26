@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh Codex weekly quota for cc-statusline
+
+[Service]
+Type=oneshot
+UMask=0077
+Environment="CODEX_BIN=@CODEX_BIN@"
+Environment="CC_STATUSLINE_CACHE_FILE=@CACHE_FILE@"
+ExecStart="@PYTHON_BIN@" "@HELPER_PATH@"
+TimeoutStartSec=20s
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true

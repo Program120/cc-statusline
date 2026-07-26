@@ -1,0 +1,28 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shell dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bc jq
+      - name: Check shell syntax
+        run: bash -n statusline.sh install.sh uninstall.sh
+      - name: Validate LaunchAgent template
+        if: runner.os == 'macOS'
+        run: plutil -lint launchd/com.program120.cc-statusline-codex-quota.plist.in
+      - name: Run tests
+        run: python3 -m unittest discover -s tests -v
