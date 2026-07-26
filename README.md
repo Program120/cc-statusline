@@ -1,6 +1,6 @@
 # cc-statusline
 
-A lightweight Powerline-style status line for [Claude Code](https://claude.ai/code), focused on prompt-cache monitoring, usage tracking, and an optional Codex weekly-quota snapshot.
+A lightweight Powerline-style status line for [Claude Code](https://claude.ai/code) that shows Claude and Codex quotas side by side, plus prompt-cache monitoring and usage tracking.
 
 ![screenshot](./screenshot.png)
 
@@ -9,7 +9,7 @@ A lightweight Powerline-style status line for [Claude Code](https://claude.ai/co
 - **Prompt Cache Hit Rate** — cache-read percentage with color-coded alerts
 - **Token Breakdown** — cache read/write, input, and output tokens
 - **Claude Usage** — session and weekly percentages when Claude Code provides them
-- **Codex Weekly Quota** — remaining percentage and reset countdown from a redacted local snapshot
+- **Codex Quota** — 5-hour and weekly remaining percentages with reset countdowns from a redacted local snapshot
 - **Context Window** — occupied tokens and context percentage
 - **Live Reasoning Effort** — the effective `low`, `medium`, `high`, `xhigh`, or `max` value for the current session
 - **Model, Git Branch, and Session ID** — including live branch updates with `refreshInterval`
@@ -19,20 +19,22 @@ A lightweight Powerline-style status line for [Claude Code](https://claude.ai/co
 
 ```text
 Line 1:  Model: Opus 4.8 (1M) ► Effort: xhigh ► Ctx: 503.8k ► Ctx: 7% ► main
-Line 2:  Session: 14% ► Reset ~3h50m ► Weekly: 10% ► Reset ~5d ► Codex W: 68% left ► Reset ~5d
+Line 2:  Session: 14% ► Reset ~3h50m ► Weekly: 10% ► Reset ~5d  |  Codex 5h: 96% left ► Reset ~2h10m ► Codex W: 68% left ► Reset ~5d
 Line 3:  Cache  97%   Read 68.3k   Write 1.7k  |  In 1   Out 126
 Line 4:  Session: 0f9c2a71-4d3e-4b8a-9c15-6e2b7a04d8f3
 ```
 
-Claude and Codex percentages intentionally have different labels: Claude Code supplies used percentages, while `Codex W` explicitly shows the percentage **left**. `Codex W*` means the last successful snapshot is older than 15 minutes. It is hidden after 60 minutes or once its reset time has passed.
+Line 2 unifies both providers. The Claude group (`Session`/`Weekly`) renders whenever Claude Code supplies rate limits; the Codex group (`Codex 5h`/`Codex W`) renders whenever a fresh local snapshot exists. A dim `|` divider separates the groups when both are present, and either group disappears cleanly on its own — a proxy session that supplies no Claude limits simply shows the Codex group alone.
+
+Claude and Codex percentages intentionally have different labels: Claude Code supplies used percentages, while the Codex segments explicitly show the percentage **left**. The `Codex 5h` label follows the actual rolling-window duration reported by Codex. A `*` after a Codex label means the last successful snapshot is older than 15 minutes; each Codex segment is hidden after 60 minutes or once its own reset time has passed.
 
 `Effort` comes directly from the live `.effort.level` field in Claude Code's statusline input. It reflects the effective session value, including mid-session `/effort` changes; the script does not infer it from settings, environment variables, CC Switch, or the model name. The segment is hidden when the model does not support effort, the field is unavailable, or its value is invalid. Claude Code's separate `.thinking.enabled` boolean is intentionally not shown because it is not an effort level.
 
 ## How the Codex quota integration works
 
-The one-second statusline command never launches Codex or accesses the network. A separate helper runs `codex app-server --stdio` every five minutes and calls the official `account/rateLimits/read` RPC. It selects the main `codex` bucket's 10,080-minute window rather than assuming `primary` or `secondary` has a fixed meaning.
+The one-second statusline command never launches Codex or accesses the network. A separate helper runs `codex app-server --stdio` every five minutes and calls the official `account/rateLimits/read` RPC. It selects the main `codex` bucket's 10,080-minute window rather than assuming `primary` or `secondary` has a fixed meaning, and additionally captures the bucket's shorter rolling window (usually five hours) when one is present. The weekly window is required for a refresh to succeed; the session window is optional and never fails a refresh.
 
-Only this redacted schema is written to `${XDG_CACHE_HOME:-~/.cache}/cc-statusline/codex-quota.json`:
+Only this redacted schema is written to `${XDG_CACHE_HOME:-~/.cache}/cc-statusline/codex-quota.json` (the `session` object is omitted when Codex reports no shorter window):
 
 ```json
 {
@@ -42,6 +44,11 @@ Only this redacted schema is written to `${XDG_CACHE_HOME:-~/.cache}/cc-statusli
     "remaining_percent": 68,
     "window_duration_mins": 10080,
     "resets_at": 1785282605
+  },
+  "session": {
+    "remaining_percent": 96,
+    "window_duration_mins": 300,
+    "resets_at": 1784807200
   }
 }
 ```

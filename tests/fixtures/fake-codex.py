@@ -68,6 +68,11 @@ def main() -> int:
             "codex": {
                 "limitId": "codex",
                 "primary": {
+                    "usedPercent": 4,
+                    "windowDurationMins": 300,
+                    "resetsAt": now + 7200,
+                },
+                "secondary": {
                     "usedPercent": 32,
                     "windowDurationMins": 10080,
                     "resetsAt": now + 604800,

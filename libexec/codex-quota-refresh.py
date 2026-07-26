@@ -192,7 +192,15 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def select_codex_weekly_window(result: dict[str, Any], now: int) -> dict[str, int]:
+def _redacted_window(window: dict[str, Any], duration_mins: int, resets_at: int) -> dict[str, int]:
+    return {
+        "remaining_percent": 100 - window["usedPercent"],
+        "window_duration_mins": duration_mins,
+        "resets_at": resets_at,
+    }
+
+
+def select_codex_windows(result: dict[str, Any], now: int) -> dict[str, dict[str, int]]:
     by_limit_id = result.get("rateLimitsByLimitId")
     if isinstance(by_limit_id, dict):
         snapshot = by_limit_id.get("codex")
@@ -222,26 +230,44 @@ def select_codex_weekly_window(result: dict[str, Any], now: int) -> dict[str, in
     if len(candidates) != 1:
         raise RefreshError("weekly Codex window is missing or ambiguous")
 
-    window = candidates[0]
-    used_percent = window.get("usedPercent")
-    resets_at = window.get("resetsAt")
+    weekly = candidates[0]
+    used_percent = weekly.get("usedPercent")
+    resets_at = weekly.get("resetsAt")
     if not _is_int(used_percent) or not 0 <= used_percent <= 100:
         raise RefreshError("weekly used percentage is invalid")
     if not _is_int(resets_at) or resets_at <= now:
         raise RefreshError("weekly reset time is invalid")
 
-    return {
-        "remaining_percent": 100 - used_percent,
-        "window_duration_mins": WEEKLY_WINDOW_MINS,
-        "resets_at": resets_at,
-    }
+    windows = {"weekly": _redacted_window(weekly, WEEKLY_WINDOW_MINS, resets_at)}
+
+    # The shorter rolling window (usually five hours) is optional: an invalid or
+    # absent session window never fails a refresh that has a valid weekly one.
+    for key in ("primary", "secondary"):
+        window = snapshot.get(key)
+        if not isinstance(window, dict) or window is weekly:
+            continue
+        duration_mins = window.get("windowDurationMins")
+        session_used = window.get("usedPercent")
+        session_resets = window.get("resetsAt")
+        if (
+            _is_int(duration_mins)
+            and 0 < duration_mins != WEEKLY_WINDOW_MINS
+            and _is_int(session_used)
+            and 0 <= session_used <= 100
+            and _is_int(session_resets)
+            and session_resets > now
+        ):
+            windows["session"] = _redacted_window(window, duration_mins, session_resets)
+        break
+
+    return windows
 
 
 def make_snapshot(result: dict[str, Any], fetched_at: int) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "fetched_at": fetched_at,
-        "weekly": select_codex_weekly_window(result, fetched_at),
+        **select_codex_windows(result, fetched_at),
     }
 
 

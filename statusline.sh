@@ -207,6 +207,9 @@ fi
 NOW=$(date +%s)
 CODEX_REMAIN_PCT=""
 CODEX_RESET=""
+CODEX_S_PCT=""
+CODEX_S_RESET=""
+CODEX_S_MINS=""
 CODEX_STALE=0
 CODEX_CACHE_FILE="${CC_STATUSLINE_CACHE_FILE:-}"
 if [ -z "$CODEX_CACHE_FILE" ]; then
@@ -234,17 +237,47 @@ if [ -n "$CODEX_CACHE_FILE" ] && [ -r "$CODEX_CACHE_FILE" ]; then
       and (.weekly.resets_at | floor) == .weekly.resets_at
       and .weekly.resets_at > 0
     )
+    | ((.session // null) as $s
+       | if ($s | type) == "object"
+           and ($s.window_duration_mins | type) == "number"
+           and ($s.window_duration_mins | floor) == $s.window_duration_mins
+           and $s.window_duration_mins > 0
+           and $s.window_duration_mins != 10080
+           and ($s.remaining_percent | type) == "number"
+           and ($s.remaining_percent | floor) == $s.remaining_percent
+           and $s.remaining_percent >= 0
+           and $s.remaining_percent <= 100
+           and ($s.resets_at | type) == "number"
+           and ($s.resets_at | floor) == $s.resets_at
+           and $s.resets_at > 0
+         then $s else null end) as $sess
     | "CODEX_FETCHED_AT=\(.fetched_at | @sh)",
       "CODEX_REMAIN_PCT=\(.weekly.remaining_percent | @sh)",
-      "CODEX_RESET=\(.weekly.resets_at | @sh)"
+      "CODEX_RESET=\(.weekly.resets_at | @sh)",
+      "CODEX_S_PCT=\((if $sess then $sess.remaining_percent else "" end) | @sh)",
+      "CODEX_S_RESET=\((if $sess then $sess.resets_at else "" end) | @sh)",
+      "CODEX_S_MINS=\((if $sess then $sess.window_duration_mins else "" end) | @sh)"
   ' "$CODEX_CACHE_FILE" 2>/dev/null); then
     eval "$codex_fields"
     CODEX_AGE=$((NOW - CODEX_FETCHED_AT))
-    if [ "$CODEX_AGE" -lt -60 ] || [ "$CODEX_AGE" -gt 3600 ] || [ "$CODEX_RESET" -le "$NOW" ]; then
+    if [ "$CODEX_AGE" -lt -60 ] || [ "$CODEX_AGE" -gt 3600 ]; then
       CODEX_REMAIN_PCT=""
       CODEX_RESET=""
-    elif [ "$CODEX_AGE" -gt 900 ]; then
-      CODEX_STALE=1
+      CODEX_S_PCT=""
+      CODEX_S_RESET=""
+      CODEX_S_MINS=""
+    else
+      [ "$CODEX_AGE" -gt 900 ] && CODEX_STALE=1
+      # Each window hides independently once its own reset time has passed.
+      if [ "$CODEX_RESET" -le "$NOW" ]; then
+        CODEX_REMAIN_PCT=""
+        CODEX_RESET=""
+      fi
+      if [ -n "$CODEX_S_RESET" ] && [ "$CODEX_S_RESET" -le "$NOW" ]; then
+        CODEX_S_PCT=""
+        CODEX_S_RESET=""
+        CODEX_S_MINS=""
+      fi
     fi
   fi
 fi
@@ -271,6 +304,14 @@ remaining() {
   elif [ "$diff" -lt 3600 ]; then echo "$((diff / 60))m"
   elif [ "$diff" -lt 86400 ]; then echo "$((diff / 3600))h$((diff % 3600 / 60))m"
   else echo "$((diff / 86400))d $((diff % 86400 / 3600))hr $((diff % 3600 / 60))m"
+  fi
+}
+
+window_label() {
+  local mins=$1
+  if [ $((mins % 1440)) -eq 0 ]; then echo "$((mins / 1440))d"
+  elif [ $((mins % 60)) -eq 0 ]; then echo "$((mins / 60))h"
+  else echo "${mins}m"
   fi
 }
 
@@ -316,9 +357,12 @@ CR=""; CW=""; IN=""; OUT=""
 if ! is_uint "$FIVE_HR_PCT"; then FIVE_HR_PCT=""; fi
 if ! is_uint "$WEEK_PCT"; then WEEK_PCT=""; fi
 if ! is_uint "$CODEX_REMAIN_PCT"; then CODEX_REMAIN_PCT=""; fi
+if ! is_uint "$CODEX_S_PCT"; then CODEX_S_PCT=""; fi
 FIVE_REMAIN=""
 WEEK_REMAIN=""
 CODEX_REMAIN=""
+CODEX_S_REMAIN=""
+CODEX_S_LABEL=""
 if [ -n "$FIVE_HR_PCT" ] && is_uint "$FIVE_HR_RESET" && [ "$FIVE_HR_RESET" -gt 0 ]; then
   FIVE_REMAIN=$(remaining "$FIVE_HR_RESET")
 fi
@@ -329,6 +373,13 @@ if [ -n "$CODEX_REMAIN_PCT" ] && is_uint "$CODEX_RESET" && [ "$CODEX_RESET" -gt 
   CODEX_REMAIN=$(remaining "$CODEX_RESET")
 else
   CODEX_REMAIN_PCT=""
+fi
+if [ -n "$CODEX_S_PCT" ] && is_uint "$CODEX_S_RESET" && [ "$CODEX_S_RESET" -gt "$NOW" ] \
+  && is_uint "$CODEX_S_MINS" && [ "$CODEX_S_MINS" -gt 0 ]; then
+  CODEX_S_REMAIN=$(remaining "$CODEX_S_RESET")
+  CODEX_S_LABEL=$(window_label "$CODEX_S_MINS")
+else
+  CODEX_S_PCT=""
 fi
 
 # Git branch. Resolve against the session's dir (CWD from jq above), not the
@@ -412,21 +463,36 @@ if [ -n "$WEEK_PCT" ]; then
     RATE_BG=103
   fi
 fi
-if [ -n "$CODEX_REMAIN_PCT" ]; then
+if [ -n "$CODEX_S_PCT" ] || [ -n "$CODEX_REMAIN_PCT" ]; then
+  # A dim divider separates the Claude group from the Codex group, and the
+  # powerline chain restarts after it.
   if [ "$RATE_PRINTED" -eq 1 ]; then
-    sep "$RATE_BG" 109
+    sep_end "$RATE_BG"
+    printf " ${DIM}|${R} "
+    RATE_PRINTED=0
   fi
-  if [ "$CODEX_STALE" -eq 1 ]; then
-    printf "${C_TEAL} Codex W*: %s%% left ${R}" "$CODEX_REMAIN_PCT"
-  else
-    printf "${C_TEAL} Codex W: %s%% left ${R}" "$CODEX_REMAIN_PCT"
+  CODEX_MARK=""
+  [ "$CODEX_STALE" -eq 1 ] && CODEX_MARK="*"
+  if [ -n "$CODEX_S_PCT" ]; then
+    printf "${C_BLUE} Codex %s%s: %s%% left ${R}" "$CODEX_S_LABEL" "$CODEX_MARK" "$CODEX_S_PCT"
+    RATE_PRINTED=1
+    RATE_BG=67
+    if [ -n "$CODEX_S_REMAIN" ]; then
+      sep "$RATE_BG" 180
+      printf "${C_TAN} Reset ~%s ${R}" "$CODEX_S_REMAIN"
+      RATE_BG=180
+    fi
   fi
-  RATE_PRINTED=1
-  RATE_BG=109
-  if [ -n "$CODEX_REMAIN" ]; then
-    sep "$RATE_BG" 180
-    printf "${C_TAN} Reset ~%s ${R}" "$CODEX_REMAIN"
-    RATE_BG=180
+  if [ -n "$CODEX_REMAIN_PCT" ]; then
+    [ "$RATE_PRINTED" -eq 1 ] && sep "$RATE_BG" 109
+    printf "${C_TEAL} Codex W%s: %s%% left ${R}" "$CODEX_MARK" "$CODEX_REMAIN_PCT"
+    RATE_PRINTED=1
+    RATE_BG=109
+    if [ -n "$CODEX_REMAIN" ]; then
+      sep "$RATE_BG" 180
+      printf "${C_TAN} Reset ~%s ${R}" "$CODEX_REMAIN"
+      RATE_BG=180
+    fi
   fi
 fi
 if [ "$RATE_PRINTED" -eq 1 ]; then

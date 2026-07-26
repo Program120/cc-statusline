@@ -38,29 +38,66 @@ class WindowSelectionTests(unittest.TestCase):
         return {"rateLimitsByLimitId": {"codex": snapshot}}
 
     def test_selects_primary_weekly_window(self) -> None:
-        selected = quota.select_codex_weekly_window(
+        selected = quota.select_codex_windows(
             self.result({"primary": self.window(), "secondary": self.window(minutes=300)}),
             self.now,
         )
-        self.assertEqual(selected["remaining_percent"], 68)
+        self.assertEqual(selected["weekly"]["remaining_percent"], 68)
 
     def test_selects_secondary_weekly_window(self) -> None:
-        selected = quota.select_codex_weekly_window(
+        selected = quota.select_codex_windows(
             self.result({"primary": self.window(minutes=300), "secondary": self.window(used=9)}),
             self.now,
         )
-        self.assertEqual(selected["remaining_percent"], 91)
+        self.assertEqual(selected["weekly"]["remaining_percent"], 91)
+
+    def test_session_window_is_captured_from_either_slot(self) -> None:
+        for snapshot in (
+            {"primary": self.window(used=4, minutes=300), "secondary": self.window()},
+            {"primary": self.window(), "secondary": self.window(used=4, minutes=300)},
+        ):
+            with self.subTest(snapshot=snapshot):
+                selected = quota.select_codex_windows(self.result(snapshot), self.now)
+                self.assertEqual(selected["weekly"]["remaining_percent"], 68)
+                self.assertEqual(
+                    selected["session"],
+                    {
+                        "remaining_percent": 96,
+                        "window_duration_mins": 300,
+                        "resets_at": self.now + 500,
+                    },
+                )
+
+    def test_invalid_session_window_is_omitted_not_fatal(self) -> None:
+        for session in (
+            self.window(used=101, minutes=300),
+            self.window(used=True, minutes=300),
+            self.window(minutes="300"),
+            self.window(minutes=300, reset=self.now),
+        ):
+            with self.subTest(session=session):
+                selected = quota.select_codex_windows(
+                    self.result({"primary": session, "secondary": self.window()}), self.now
+                )
+                self.assertEqual(selected["weekly"]["remaining_percent"], 68)
+                self.assertNotIn("session", selected)
+
+    def test_weekly_only_snapshot_has_no_session(self) -> None:
+        selected = quota.select_codex_windows(
+            self.result({"primary": self.window()}), self.now
+        )
+        self.assertNotIn("session", selected)
 
     def test_ignores_other_limit_ids(self) -> None:
         result = self.result({"primary": self.window(used=27)})
         result["rateLimitsByLimitId"]["codex-spark"] = {"primary": self.window(used=0)}
         self.assertEqual(
-            quota.select_codex_weekly_window(result, self.now)["remaining_percent"], 73
+            quota.select_codex_windows(result, self.now)["weekly"]["remaining_percent"], 73
         )
 
     def test_map_without_codex_is_rejected(self) -> None:
         with self.assertRaises(quota.RefreshError):
-            quota.select_codex_weekly_window(
+            quota.select_codex_windows(
                 {"rateLimitsByLimitId": {"codex-spark": {"primary": self.window()}}},
                 self.now,
             )
@@ -71,12 +108,12 @@ class WindowSelectionTests(unittest.TestCase):
             "rateLimits": {"limitId": "codex", "primary": self.window(used=40)},
         }
         self.assertEqual(
-            quota.select_codex_weekly_window(result, self.now)["remaining_percent"], 60
+            quota.select_codex_windows(result, self.now)["weekly"]["remaining_percent"], 60
         )
 
     def test_other_legacy_limit_is_rejected(self) -> None:
         with self.assertRaises(quota.RefreshError):
-            quota.select_codex_weekly_window(
+            quota.select_codex_windows(
                 {
                     "rateLimitsByLimitId": None,
                     "rateLimits": {"limitId": "codex-spark", "primary": self.window()},
@@ -90,18 +127,18 @@ class WindowSelectionTests(unittest.TestCase):
             {"primary": self.window(), "secondary": self.window()},
         ):
             with self.subTest(snapshot=snapshot), self.assertRaises(quota.RefreshError):
-                quota.select_codex_weekly_window(self.result(snapshot), self.now)
+                quota.select_codex_windows(self.result(snapshot), self.now)
 
     def test_invalid_used_percent_is_rejected(self) -> None:
         for value in (True, -1, 101, "32"):
             with self.subTest(value=value), self.assertRaises(quota.RefreshError):
-                quota.select_codex_weekly_window(
+                quota.select_codex_windows(
                     self.result({"primary": self.window(used=value)}), self.now
                 )
 
     def test_expired_reset_is_rejected(self) -> None:
         with self.assertRaises(quota.RefreshError):
-            quota.select_codex_weekly_window(
+            quota.select_codex_windows(
                 self.result({"primary": self.window(reset=self.now)}), self.now
             )
 
@@ -139,14 +176,17 @@ class RefreshIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         data = json.loads(self.cache.read_text(encoding="utf-8"))
-        self.assertEqual(set(data), {"schema_version", "fetched_at", "weekly"})
-        self.assertEqual(
-            set(data["weekly"]),
-            {"remaining_percent", "window_duration_mins", "resets_at"},
-        )
+        self.assertEqual(set(data), {"schema_version", "fetched_at", "weekly", "session"})
+        for window in (data["weekly"], data["session"]):
+            self.assertEqual(
+                set(window),
+                {"remaining_percent", "window_duration_mins", "resets_at"},
+            )
+            self.assertGreater(window["resets_at"], data["fetched_at"])
         self.assertEqual(data["weekly"]["remaining_percent"], 68)
         self.assertEqual(data["weekly"]["window_duration_mins"], 10080)
-        self.assertGreater(data["weekly"]["resets_at"], data["fetched_at"])
+        self.assertEqual(data["session"]["remaining_percent"], 96)
+        self.assertEqual(data["session"]["window_duration_mins"], 300)
         self.assertEqual(stat.S_IMODE(self.cache.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(self.cache.parent.stat().st_mode), 0o700)
 

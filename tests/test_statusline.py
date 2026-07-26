@@ -68,23 +68,26 @@ class StatuslineTests(unittest.TestCase):
         reset_delta: int = 3600,
         remaining: object = 68,
         schema: int = 1,
+        session: dict | None = None,
     ) -> None:
         now = int(time.time())
+        snapshot = {
+            "schema_version": schema,
+            "fetched_at": now - age,
+            "weekly": {
+                "remaining_percent": remaining,
+                "window_duration_mins": 10080,
+                "resets_at": now + reset_delta,
+            },
+        }
+        if session is not None:
+            snapshot["session"] = {
+                "remaining_percent": session.get("remaining", 96),
+                "window_duration_mins": session.get("mins", 300),
+                "resets_at": now + session.get("reset_delta", 7200),
+            }
         self.quota_file.parent.mkdir(parents=True, exist_ok=True)
-        self.quota_file.write_text(
-            json.dumps(
-                {
-                    "schema_version": schema,
-                    "fetched_at": now - age,
-                    "weekly": {
-                        "remaining_percent": remaining,
-                        "window_duration_mins": 10080,
-                        "resets_at": now + reset_delta,
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        self.quota_file.write_text(json.dumps(snapshot), encoding="utf-8")
 
     def render(self, data: dict) -> str:
         result = subprocess.run(
@@ -163,9 +166,57 @@ class StatuslineTests(unittest.TestCase):
         self.assertIn("Codex W: 68% left", output)
         self.assertIn("Reset ~", output)
 
+    def test_session_window_renders_before_weekly(self) -> None:
+        self.write_quota(session={"remaining": 96, "mins": 300})
+        quota_line = self.render(payload()).splitlines()[1]
+        self.assertIn("Codex 5h: 96% left", quota_line)
+        self.assertIn("Codex W: 68% left", quota_line)
+        self.assertLess(quota_line.index("Codex 5h:"), quota_line.index("Codex W:"))
+        self.assertNotIn("|", quota_line)
+
+    def test_session_window_label_follows_duration(self) -> None:
+        for mins, label in ((300, "5h"), (90, "90m"), (2880, "2d")):
+            with self.subTest(mins=mins):
+                self.write_quota(session={"mins": mins})
+                self.assertIn(f"Codex {label}: 96% left", self.render(payload()))
+
+    def test_divider_separates_claude_and_codex_groups(self) -> None:
+        self.write_quota(session={})
+        data = payload()
+        now = int(time.time())
+        data["rate_limits"] = {
+            "five_hour": {"used_percentage": 20, "resets_at": now + 3600},
+            "seven_day": {"used_percentage": 30, "resets_at": now + 86400},
+        }
+        quota_line = self.render(data).splitlines()[1]
+        self.assertIn("Session: 20%", quota_line)
+        self.assertIn("|", quota_line)
+        self.assertLess(quota_line.index("Weekly: 30%"), quota_line.index("|"))
+        self.assertLess(quota_line.index("|"), quota_line.index("Codex 5h:"))
+
+    def test_expired_session_window_hides_only_itself(self) -> None:
+        self.write_quota(session={"reset_delta": -1})
+        output = self.render(payload())
+        self.assertNotIn("Codex 5h", output)
+        self.assertIn("Codex W: 68% left", output)
+
+    def test_invalid_session_window_is_hidden(self) -> None:
+        for session in ({"remaining": 101}, {"mins": 10080}, {"remaining": "96"}):
+            with self.subTest(session=session):
+                self.write_quota(session=session)
+                quota_line = self.render(payload()).splitlines()[1]
+                self.assertEqual(quota_line.count("Codex "), 1)
+                self.assertIn("Codex W: 68% left", quota_line)
+
     def test_stale_quota_is_marked(self) -> None:
         self.write_quota(age=901)
         self.assertIn("Codex W*: 68% left", self.render(payload()))
+
+    def test_stale_marks_both_codex_windows(self) -> None:
+        self.write_quota(age=901, session={})
+        output = self.render(payload())
+        self.assertIn("Codex 5h*: 96% left", output)
+        self.assertIn("Codex W*: 68% left", output)
 
     def test_old_or_expired_quota_is_hidden(self) -> None:
         for age, reset_delta in ((3601, 3600), (0, -1)):
