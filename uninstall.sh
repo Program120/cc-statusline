@@ -9,6 +9,8 @@ SYSTEMD_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 CACHE_FILE="${CC_STATUSLINE_CACHE_FILE:-${XDG_CACHE_HOME:-${HOME}/.cache}/cc-statusline/codex-quota.json}"
 SERVICE_NAME="cc-statusline-codex-quota.service"
 TIMER_NAME="cc-statusline-codex-quota.timer"
+LAUNCHD_LABEL="com.program120.cc-statusline-codex-quota"
+LAUNCHD_PLIST="${HOME}/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
 PURGE=0
 NO_CONFIG=0
 
@@ -41,6 +43,14 @@ if command -v systemctl >/dev/null 2>&1 \
   && systemctl --user show-environment >/dev/null 2>&1; then
   systemctl --user daemon-reload
 fi
+
+if command -v launchctl >/dev/null 2>&1; then
+  launchd_domain="gui/$(id -u)"
+  launchctl bootout "$launchd_domain" "$LAUNCHD_PLIST" >/dev/null 2>&1 \
+    || launchctl bootout "$launchd_domain/$LAUNCHD_LABEL" >/dev/null 2>&1 \
+    || true
+fi
+rm -f -- "$LAUNCHD_PLIST"
 
 rm -f -- "$DATA_DIR/libexec/codex-quota-refresh.py"
 rmdir -- "$DATA_DIR/libexec" "$DATA_DIR" 2>/dev/null || true

@@ -63,11 +63,11 @@ Optional Codex quota:
 
 - Codex CLI with a valid login
 - Python 3 (standard library only)
-- Linux user systemd for automatic five-minute refresh; other systems can run the helper manually
+- Linux user systemd or macOS launchd for automatic five-minute refresh; other systems can run the helper manually
 
 ## Install
 
-The default installer writes `~/.claude/statusline.sh`, preserves unrelated settings, and enables the optional Codex timer when its dependencies are available:
+The default installer writes `~/.claude/statusline.sh`, preserves unrelated settings, and enables the optional Codex refresher when its dependencies are available. On Linux it installs a user systemd timer; on macOS it installs a user LaunchAgent at `~/Library/LaunchAgents/com.program120.cc-statusline-codex-quota.plist`. Both run every five minutes, and the macOS agent also refreshes at login/install via `RunAtLoad`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Program120/cc-statusline/main/install.sh | bash
@@ -106,14 +106,24 @@ Add the statusLine object above to `~/.claude/settings.json`, using the real abs
 
 ### Manual Codex refresh
 
-When user systemd is unavailable, the installer still installs the helper and prints an exact command. The generic form is:
+When automatic scheduling is unavailable or activation fails (for example, in a headless macOS SSH session), the installer still installs the helper and prints an exact command. The generic form is:
 
 ```bash
 CODEX_BIN=/absolute/path/to/codex \
-python3 "${XDG_DATA_HOME:-$HOME/.local/share}/cc-statusline/libexec/codex-quota-refresh.py"
+python3 "${XDG_DATA_HOME:-$HOME/.local/share}/cc-statusline/libexec/codex-quota-refresh.py" \
+  --cache-file "${XDG_CACHE_HOME:-$HOME/.cache}/cc-statusline/codex-quota.json"
 ```
 
-The Codex segment remains hidden until a valid cache exists. The installer does not modify cron or launchd automatically.
+The Codex segment remains hidden until a valid cache exists. The installer never modifies cron; it only manages the named user systemd timer or macOS LaunchAgent.
+
+### Installing an unreleased branch
+
+The installer downloads its companion files from `main` by default. To test a release branch before merge, set the matching ref explicitly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Program120/cc-statusline/release/codex/install.sh \
+  | CC_STATUSLINE_REF=release/codex bash
+```
 
 ## Live branch updates
 
@@ -137,12 +147,18 @@ cache_read / (input + cache_read + cache_creation)
 
 ```bash
 codex --version
+
+# Linux
 systemctl --user status cc-statusline-codex-quota.service
 systemctl --user list-timers cc-statusline-codex-quota.timer
 journalctl --user -u cc-statusline-codex-quota.service
+
+# macOS
+plutil -lint "$HOME/Library/LaunchAgents/com.program120.cc-statusline-codex-quota.plist"
+launchctl print "gui/$(id -u)/com.program120.cc-statusline-codex-quota"
 ```
 
-The helper deliberately logs only failure categories; it does not log the raw app-server response. A transient failure should not change the existing cache file.
+The helper deliberately logs only failure categories; it does not log the raw app-server response. A transient failure should not change the existing cache file. On macOS, `StartInterval` is not a wall-clock schedule: after sleep, the next refresh can occur up to five minutes after wake.
 
 ## Uninstall
 
@@ -152,7 +168,7 @@ Run the repository's uninstaller:
 bash uninstall.sh
 ```
 
-It removes the timer and helper, but leaves `~/.claude/statusline.sh` in place when ownership cannot be proven. It only removes a matching statusLine setting and never deletes the entire settings file. Add `--no-config` for CC Switch-managed configuration, and `--purge` to remove the redacted quota cache as well.
+It unloads and removes the Linux timer or macOS LaunchAgent plus the helper, but leaves `~/.claude/statusline.sh` in place when ownership cannot be proven. It only removes a matching statusLine setting and never deletes the entire settings file. Add `--no-config` for CC Switch-managed configuration, and `--purge` to remove the redacted quota cache as well.
 
 ## Development
 

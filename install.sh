@@ -12,6 +12,9 @@ HELPER_DEST="${DATA_DIR}/libexec/codex-quota-refresh.py"
 SYSTEMD_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 SERVICE_NAME="cc-statusline-codex-quota.service"
 TIMER_NAME="cc-statusline-codex-quota.timer"
+LAUNCHD_LABEL="com.program120.cc-statusline-codex-quota"
+LAUNCHD_DIR="${HOME}/Library/LaunchAgents"
+LAUNCHD_PLIST="${LAUNCHD_DIR}/${LAUNCHD_LABEL}.plist"
 CACHE_FILE="${CC_STATUSLINE_CACHE_FILE:-${XDG_CACHE_HOME:-${HOME}/.cache}/cc-statusline/codex-quota.json}"
 NO_CONFIG=0
 
@@ -62,7 +65,7 @@ atomic_install() {
 }
 
 resolve_codex() {
-  local candidate
+  local candidate candidate_dir
   if [ -n "${CODEX_BIN:-}" ]; then
     candidate=$CODEX_BIN
   elif candidate=$(command -v codex 2>/dev/null); then
@@ -75,7 +78,8 @@ resolve_codex() {
     return 1
   fi
   [ -f "$candidate" ] && [ -x "$candidate" ] || return 1
-  readlink -f -- "$candidate" 2>/dev/null || printf '%s\n' "$candidate"
+  candidate_dir=$(cd -P -- "$(dirname -- "$candidate")" && pwd)
+  printf '%s/%s\n' "$candidate_dir" "$(basename -- "$candidate")"
 }
 
 systemd_escape_value() {
@@ -87,6 +91,76 @@ systemd_escape_value() {
   printf '%s' "$value"
 }
 
+install_launchagent() {
+  local node_path launchd_path launchd_domain
+
+  if ! command -v plutil >/dev/null 2>&1; then
+    printf 'Warning: plutil is unavailable; automatic quota refresh was skipped.\n' >&2
+    return
+  fi
+
+  node_path=$(command -v node 2>/dev/null || true)
+  launchd_path="$(dirname -- "$CODEX_PATH"):$(dirname -- "${node_path:-/usr/bin/node}"):$(dirname -- "$PYTHON_PATH"):/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  if ! python3 - "$staging/launchd.plist.in" "$staging/launchd.plist" \
+    "$PYTHON_PATH" "$HELPER_DEST" "$CODEX_PATH" "$CACHE_FILE" \
+    "$HOME" "$launchd_path" "${CODEX_HOME:-}" <<'PY'
+import os
+from pathlib import Path
+import plistlib
+import sys
+
+(source, target, python_bin, helper, codex_bin, cache, home, path, codex_home) = sys.argv[1:]
+
+def absolute(value: str) -> str:
+    return os.path.abspath(os.path.expanduser(value))
+
+with Path(source).open("rb") as input_file:
+    data = plistlib.load(input_file)
+cache = absolute(cache)
+data["ProgramArguments"] = [absolute(python_bin), absolute(helper), "--cache-file", cache]
+environment = {
+    "CODEX_BIN": absolute(codex_bin),
+    "HOME": absolute(home),
+    "PATH": path,
+}
+if codex_home:
+    environment["CODEX_HOME"] = absolute(codex_home)
+data["EnvironmentVariables"] = environment
+with Path(target).open("wb") as output_file:
+    plistlib.dump(data, output_file, fmt=plistlib.FMT_XML, sort_keys=False)
+PY
+  then
+    printf 'Warning: the LaunchAgent could not be generated; automatic quota refresh was skipped.\n' >&2
+    return
+  fi
+  if ! plutil -lint "$staging/launchd.plist" >/dev/null; then
+    printf 'Warning: generated LaunchAgent is invalid; automatic quota refresh was skipped.\n' >&2
+    return
+  fi
+
+  launchd_domain="gui/$(id -u)"
+  if command -v launchctl >/dev/null 2>&1; then
+    launchctl bootout "$launchd_domain" "$LAUNCHD_PLIST" >/dev/null 2>&1 \
+      || launchctl bootout "$launchd_domain/$LAUNCHD_LABEL" >/dev/null 2>&1 \
+      || true
+  fi
+  atomic_install "$staging/launchd.plist" "$LAUNCHD_PLIST" 0644
+
+  if ! command -v launchctl >/dev/null 2>&1; then
+    printf 'Warning: launchctl is unavailable; the LaunchAgent will load at the next login.\n' >&2
+    return
+  fi
+  launchctl enable "$launchd_domain/$LAUNCHD_LABEL" >/dev/null 2>&1 || true
+  if launchctl bootstrap "$launchd_domain" "$LAUNCHD_PLIST"; then
+    printf 'Enabled Codex quota refresh LaunchAgent.\n'
+  else
+    printf 'Warning: launchd quota setup failed; the agent will retry at login. Use the manual refresh command below for now.\n' >&2
+  fi
+}
+
+PLATFORM=$(uname -s)
+CODEX_PATH=""
+PYTHON_PATH=""
 printf 'Installing cc-statusline...\n'
 mkdir -p -- "${HOME}/.claude" "$DATA_DIR/libexec"
 staging=$(mktemp -d "${TMPDIR:-/tmp}/cc-statusline-install.XXXXXX")
@@ -94,8 +168,12 @@ trap 'rm -rf -- "$staging"' EXIT
 
 fetch "${RAW_BASE}/statusline.sh" "$staging/statusline.sh"
 fetch "${RAW_BASE}/libexec/codex-quota-refresh.py" "$staging/codex-quota-refresh.py"
-fetch "${RAW_BASE}/systemd/cc-statusline-codex-quota.service.in" "$staging/service.in"
-fetch "${RAW_BASE}/systemd/cc-statusline-codex-quota.timer" "$staging/timer"
+if [ "$PLATFORM" = "Linux" ]; then
+  fetch "${RAW_BASE}/systemd/cc-statusline-codex-quota.service.in" "$staging/service.in"
+  fetch "${RAW_BASE}/systemd/cc-statusline-codex-quota.timer" "$staging/timer"
+elif [ "$PLATFORM" = "Darwin" ]; then
+  fetch "${RAW_BASE}/launchd/${LAUNCHD_LABEL}.plist.in" "$staging/launchd.plist.in"
+fi
 
 bash -n "$staging/statusline.sh"
 if command -v python3 >/dev/null 2>&1; then
@@ -106,11 +184,9 @@ atomic_install "$staging/statusline.sh" "$DEST" 0755
 atomic_install "$staging/codex-quota-refresh.py" "$HELPER_DEST" 0755
 printf 'Installed statusline: %s\n' "$DEST"
 
-QUOTA_READY=0
 if command -v python3 >/dev/null 2>&1 && CODEX_PATH=$(resolve_codex); then
-  QUOTA_READY=1
   PYTHON_PATH=$(command -v python3)
-  if [ "$(uname -s)" = "Linux" ] \
+  if [ "$PLATFORM" = "Linux" ] \
     && command -v systemctl >/dev/null 2>&1 \
     && systemctl --user show-environment >/dev/null 2>&1; then
     python_escaped=$(systemd_escape_value "$PYTHON_PATH")
@@ -138,8 +214,12 @@ PY
     else
       printf 'Warning: systemd quota setup failed; use the manual refresh command below.\n' >&2
     fi
-  else
+  elif [ "$PLATFORM" = "Darwin" ]; then
+    install_launchagent
+  elif [ "$PLATFORM" = "Linux" ]; then
     printf 'User systemd is unavailable; automatic quota refresh was skipped.\n'
+  else
+    printf 'Automatic quota refresh is unsupported on %s; use the manual refresh command below.\n' "$PLATFORM"
   fi
 else
   printf 'Python 3 or Codex was not found; the Codex quota segment will stay hidden.\n'
@@ -179,8 +259,9 @@ else
   printf 'Skipped Claude Code settings (--no-config).\n'
 fi
 
-if [ "$QUOTA_READY" -eq 1 ]; then
-  printf 'Manual quota refresh:\n  CODEX_BIN=%q python3 %q\n' "$CODEX_PATH" "$HELPER_DEST"
+if [ -n "$CODEX_PATH" ] && [ -n "$PYTHON_PATH" ]; then
+  printf 'Manual quota refresh:\n  CODEX_BIN=%q %q %q --cache-file %q\n' \
+    "$CODEX_PATH" "$PYTHON_PATH" "$HELPER_DEST" "$CACHE_FILE"
 fi
 printf 'StatusLine snippet:\n'
 printf '  {"type":"command","command":"bash %s","padding":0,"refreshInterval":1}\n' "$DEST"
